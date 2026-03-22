@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="utf-8" />
+    <title>光徑台中 - 西屯路燈安全分析系統</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <link rel="icon" href="favicon.png" type="image/png">
+
+    <script src="https://cdn.maptiler.com/maptiler-sdk-js/v3.10.2/maptiler-sdk.umd.min.js"></script>
+    <link href="https://cdn.maptiler.com/maptiler-sdk-js/v3.10.2/maptiler-sdk.css" rel="stylesheet" />
+    <script src="https://cdn.maptiler.com/maptiler-geocoding-control/v2.1.7/maptilersdk.umd.js"></script>
+    <link href="https://cdn.maptiler.com/maptiler-geocoding-control/v2.1.7/style.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.9.1/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+
+    <style>
+        :root { --panel-bg: rgba(255, 255, 255, 0.9); --dark-bg: rgba(33, 37, 41, 0.95); }
+        html, body { margin: 0; padding: 0; overflow: hidden; font-family: "Microsoft JhengHei", sans-serif; height: 100%; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        
+        /* 隱藏預設標籤 */
+        .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-attrib { display: none !important; }
+
+        /* 面板通用樣式 */
+        .btns, .info-panel { z-index: 1000; position: absolute; background-color: var(--panel-bg); box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: 0.3s; }
+        
+        .btns { bottom: 10px; left: 10px; width: 180px; padding: 12px; border-radius: 12px; }
+        .info-panel { top: 10px; right: 56px; width: 300px; padding: 20px; border-radius: 15px; border-top: 5px solid #007bff; max-height: 80vh; overflow-y: auto; }
+        
+        .dark-panel { background-color: var(--dark-bg) !important; color: white !important; }
+        .info-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 15px; display: flex; align-items: center; }
+        .info-item { margin-bottom: 8px; font-size: 0.9rem; border-bottom: 1px solid rgba(0,0,0,0.05); padding-bottom: 4px; }
+        .dark-panel .info-item { border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .color-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; border: 1px solid #fff; }
+        .eval-active { border: 2px solid #dc3545 !important; }
+        
+        .score-good { border-top-color: #28a745 !important; }
+        .score-warn { border-top-color: #ffc107 !important; }
+        .score-bad { border-top-color: #dc3545 !important; }
+
+        .maplibregl-ctrl-top-left { top: 94px; left: 0px; opacity: 0.8; }
+        .brand-overlay { position: absolute; top: 0; left: 0; z-index: 9999; pointer-events: none; }
+        .brand-img { height: 170px; width: auto; opacity: 0.89; margin-top: -42px; filter: drop-shadow(0 0 8px rgba(0, 251, 255, 0.3)); }
+
+        @media (max-width: 768px) {
+            .brand-img { height: 100px; margin-top: -20px; }
+            .maplibregl-ctrl-top-left { top: 60px !important; }
+            .btns { top: 470px; bottom: auto; left: auto; right: 10px; width: 150px; }
+            .info-panel { top: auto; bottom: 0; right: 0; left: 0; width: 100%; max-height: 30vh; border-radius: 20px 20px 0 0; border-right: none; }
+            .eval-active { max-height: 55vh; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map">
+    <div id="controlPanel" class="btns shadow-lg">
+        <div class="mb-2"><label class="form-label fw-bold" style="font-size: 0.8rem;">系統控制</label></div>
+        <div class="d-flex align-items-center mb-2">
+            <span class="me-2"><i class="bi bi-sun-fill text-warning"></i></span>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="modeSwitch">
+                <label class="form-check-label" for="modeSwitch"><i class="bi bi-moon-stars-fill text-primary"></i></label>
+            </div>
+        </div>
+        <button id="btn-eval" class="btn btn-outline-primary btn-sm w-100"><i class="bi bi-ruler me-1"></i>路線光照評估</button>
+    </div>
+
+    <div id="rightPanel" class="info-panel">
+        <div id="panel-default">
+            <div class="info-title"><i class="bi bi-info-circle-fill me-2"></i>單點路燈資訊</div>
+            <div id="infoPlaceholder" class="text-muted text-center py-4">請點擊或移動至路燈上</div>
+            <div id="infoContent" style="display: none;">
+                <div class="info-item"><strong>路燈編號：</strong><span id="p-id">--</span></div>
+                <div class="info-item"><strong>燈泡形式：</strong><span id="p-type-dot" class="color-indicator"></span><span id="p-type">--</span></div>
+                <div class="info-item"><strong>地理座標：</strong><span id="p-coord">--</span></div>
+            </div>
+        </div>
+        <div id="panel-eval" style="display: none;">
+            <div class="info-title"><i class="bi bi-calculator me-2"></i>光照評估報告</div>
+            <div id="eval-instruction" class="alert alert-info py-2" style="font-size:0.8rem">請在地圖上點擊 **起點**。</div>
+            <div id="eval-result" style="display:none;">
+                <div class="text-center mb-3">
+                    <div style="font-size:0.8rem; opacity:0.8;">安全得分</div>
+                    <div id="eval-score" style="font-size: 3rem; font-weight: bold; line-height: 1;">--</div>
+                </div>
+                <div class="info-item"><strong>路線長度：</strong><span id="eval-len">--</span></div>
+                <div class="info-item"><strong>沿線燈數：</strong><span id="eval-count">--</span></div>
+                <div class="info-item"><strong>平均間距：</strong><span id="eval-maxgap">--</span></div>
+                <button id="btn-reset-eval" class="btn btn-secondary btn-sm w-100 mt-2">重新點選</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="brand-overlay"><img src="favicon2.png" alt="Logo" class="brand-img"></div>
+
+<script>
+    const apiKey = '6xPxcTsZF8A5qb1CFDTV';
+    maptilersdk.config.apiKey = apiKey;
+
+    // 常用配置
+    const bulbColors = { '鈉氣燈': '#FF9900', 'LED 燈': '#FFFFFF', '水銀燈': '#CCFF00', '藝術燈': '#FFCC66', '日光燈': '#F0F8FF', 'default': '#FFFFFF' };
+    
+    // DOM 快取 (優化效能：避免在事件中重複查詢 DOM)
+    const dom = {
+        modeSwitch: document.getElementById('modeSwitch'),
+        btnEval: document.getElementById('btn-eval'),
+        rightPanel: document.getElementById('rightPanel'),
+        infoPlaceholder: document.getElementById('infoPlaceholder'),
+        infoContent: document.getElementById('infoContent'),
+        pId: document.getElementById('p-id'),
+        pType: document.getElementById('p-type'),
+        pTypeDot: document.getElementById('p-type-dot'),
+        pCoord: document.getElementById('p-coord'),
+        panelDefault: document.getElementById('panel-default'),
+        panelEval: document.getElementById('panel-eval'),
+        evalInstruction: document.getElementById('eval-instruction'),
+        evalResult: document.getElementById('eval-result'),
+        evalScore: document.getElementById('eval-score'),
+        evalLen: document.getElementById('eval-len'),
+        evalCount: document.getElementById('eval-count'),
+        evalMaxGap: document.getElementById('eval-maxgap')
+    };
+
+    let lightData = { "type": "FeatureCollection", "features": [] }; 
+    let evalMode = false, evalStep = 0, startPoint = null;
+    const evalGeoJSON = { 'type': 'FeatureCollection', 'features': [] };
+
+    const map = new maptilersdk.Map({
+        container: 'map',
+        style: maptilersdk.MapStyle.STREETS,
+        center: [120.645, 24.175],
+        zoom: 15,
+        attributionControl: false,
+        touchZoomRotate: true,
+        maxPitch: 85
+    });
+
+    map.addControl(new maptilersdkMaptilerGeocoder.GeocodingControl({ placeholder: "搜尋台中西屯區...", proximity: [120.64, 24.17] }), 'top-left');
+    map.addControl(new maptilersdk.FullscreenControl(), 'top-right');
+
+    function setupMapLayers() {
+        if (!map.getSource('xitun-lights')) map.addSource('xitun-lights', { type: 'geojson', data: lightData });
+        if (!map.getSource('eval-source')) map.addSource('eval-source', { type: 'geojson', data: evalGeoJSON });
+
+        const colorMatch = ['match', ['get', '形式'], '鈉氣燈', bulbColors['鈉氣燈'], 'LED 燈', bulbColors['LED 燈'], '水銀燈', bulbColors['水銀燈'], '藝術燈', bulbColors['藝術燈'], '日光燈', bulbColors['日光燈'], bulbColors['default']];
+
+        if (!map.getLayer('lights-halo')) {
+            map.addLayer({ 'id': 'lights-halo', 'type': 'circle', 'source': 'xitun-lights', 'paint': { 'circle-color': colorMatch, 'circle-blur': 3, 'circle-opacity': 0.6, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 5, 16, ['match', ['get', '形式'], 'LED 燈', 18, '藝術燈', 12, 25]] } });
+        }
+        if (!map.getLayer('lights-main')) {
+            map.addLayer({ 'id': 'lights-main', 'type': 'circle', 'source': 'xitun-lights', 'paint': { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 1.5, 16, 4], 'circle-color': colorMatch, 'circle-stroke-width': 1, 'circle-stroke-color': '#fff' } });
+        }
+        if (!map.getLayer('eval-line')) {
+            map.addLayer({ id: 'eval-line', type: 'line', source: 'eval-source', paint: { 'line-color': '#dc3545', 'line-width': 4, 'line-dasharray': [2, 1] }, filter: ['==', '$type', 'LineString'] });
+            map.addLayer({ id: 'eval-points', type: 'circle', source: 'eval-source', paint: { 'circle-radius': 7, 'circle-color': ['match', ['get', 'pointType'], 'start', '#28a745', 'end', '#dc3545', '#000'], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }, filter: ['==', '$type', 'Point'] });
+        }
+    }
+
+    map.on('load', () => {
+        setupMapLayers();
+        fetch('light.json').then(res => res.json()).then(rawData => {
+            lightData.features = rawData.map(item => ({
+                "type": "Feature",
+                "geometry": { "type": "Point", "coordinates": [parseFloat(item["地理座標-WGS84-東經"]), parseFloat(item["地理座標-WGS84-北緯"])] },
+                "properties": { "形式": (item["燈泡形式"] || "未知").trim(), "編號": item["路燈編號"] }
+            })).filter(f => !isNaN(f.geometry.coordinates[0]));
+            map.getSource('xitun-lights').setData(lightData);
+        });
+    });
+
+    map.on('styledata', setupMapLayers);
+
+    // 交互邏輯優化
+    const updateInfoPanel = (f) => {
+        dom.infoPlaceholder.style.display = 'none';
+        dom.infoContent.style.display = 'block';
+        dom.pId.innerText = f.properties.編號;
+        dom.pType.innerText = f.properties.形式;
+        dom.pCoord.innerText = `${f.geometry.coordinates[0].toFixed(5)}, ${f.geometry.coordinates[1].toFixed(5)}`;
+        dom.pTypeDot.style.backgroundColor = bulbColors[f.properties.形式] || '#fff';
+    };
+
+    map.on('mousemove', 'lights-main', (e) => {
+        if (evalMode || !e.features.length) return;
+        map.getCanvas().style.cursor = 'pointer';
+        updateInfoPanel(e.features[0]);
+    });
+
+    map.on('click', (e) => {
+        if (evalMode) {
+            const coords = [e.lngLat.lng, e.lngLat.lat];
+            if (evalStep === 0) {
+                evalGeoJSON.features = [{ type: 'Feature', geometry: { type: 'Point', coordinates: coords }, properties: { pointType: 'start' } }];
+                startPoint = coords; evalStep = 1;
+                dom.evalInstruction.innerText = "已設定起點。請點擊 **終點**。";
+            } else if (evalStep === 1) {
+                evalGeoJSON.features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: coords }, properties: { pointType: 'end' } }, { type: 'Feature', geometry: { type: 'LineString', coordinates: [startPoint, coords] }, properties: {} });
+                evalStep = 2;
+                performAnalysis(evalGeoJSON.features[2].geometry);
+            }
+            map.getSource('eval-source').setData(evalGeoJSON);
+        } else {
+            const features = map.queryRenderedFeatures(e.point, { layers: ['lights-main'] });
+            if (features.length) {
+                updateInfoPanel(features[0]);
+                if (window.innerWidth <= 768) map.flyTo({ center: [features[0].geometry.coordinates[0], features[0].geometry.coordinates[1] - 0.002], zoom: 16 });
+            }
+        }
+    });
+
+    function performAnalysis(lineGeom) {
+        const route = turf.feature(lineGeom);
+        const len = turf.length(route, { units: 'meters' });
+        const buffer = turf.buffer(route, 20, { units: 'meters' });
+        const nearby = lightData.features.filter(f => turf.booleanPointInPolygon(f, buffer));
+        const gap = nearby.length > 0 ? len / (nearby.length + 1) : len;
+        const score = Math.max(0, Math.round(nearby.length === 0 ? 0 : 100 - (gap * 0.8)));
+
+        dom.evalInstruction.style.display = 'none';
+        dom.evalResult.style.display = 'block';
+        dom.evalScore.innerText = score;
+        dom.evalLen.innerText = len.toFixed(0) + " m";
+        dom.evalCount.innerText = nearby.length + " 盞";
+        dom.evalMaxGap.innerText = gap.toFixed(0) + " m";
+        
+        dom.rightPanel.classList.remove('score-good', 'score-warn', 'score-bad');
+        dom.rightPanel.classList.add(score >= 80 ? 'score-good' : score >= 60 ? 'score-warn' : 'score-bad');
+    }
+
+    dom.btnEval.addEventListener('click', function() {
+        evalMode = !evalMode;
+        this.classList.toggle('btn-danger', evalMode);
+        this.innerHTML = evalMode ? '<i class="bi bi-x-circle me-1"></i>取消評估' : '<i class="bi bi-ruler me-1"></i>路線光照評估';
+        dom.panelDefault.style.display = evalMode ? 'none' : 'block';
+        dom.panelEval.style.display = evalMode ? 'block' : 'none';
+        if (!evalMode) {
+            evalStep = 0; evalGeoJSON.features = [];
+            map.getSource('eval-source').setData(evalGeoJSON);
+            dom.evalInstruction.style.display = 'block';
+            dom.evalInstruction.innerText = "請在地圖上點擊 **起點**。";
+            dom.evalResult.style.display = 'none';
+            dom.rightPanel.classList.remove('score-good', 'score-warn', 'score-bad', 'eval-active');
+        } else dom.rightPanel.classList.add('eval-active');
+    });
+
+    document.getElementById('btn-reset-eval').onclick = () => {
+        evalStep = 0; evalGeoJSON.features = [];
+        map.getSource('eval-source').setData(evalGeoJSON);
+        dom.evalInstruction.style.display = 'block';
+        dom.evalResult.style.display = 'none';
+    };
+
+    dom.modeSwitch.onchange = function() {
+        map.setStyle(this.checked ? maptilersdk.MapStyle.DATAVIZ.DARK : maptilersdk.MapStyle.STREETS);
+        document.querySelectorAll('.btns, .info-panel').forEach(el => el.classList.toggle('dark-panel', this.checked));
+    };
+</script>
+</body>
+</html>
